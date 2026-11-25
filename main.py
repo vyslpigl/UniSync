@@ -516,8 +516,18 @@ class UniSyncApp(ctk.CTk):
         )
         self.publisher_id_entry.pack(anchor="w", pady=(5, 12))
 
-        self.publisher_connect_button = ctk.CTkButton(
+        # PUBLISHER CONNECTION BUTTONS
+        publisher_connection_buttons = ctk.CTkFrame(
             body,
+            fg_color="transparent"
+        )
+        publisher_connection_buttons.pack(
+            anchor="w",
+            pady=(0, 15)
+        )
+
+        self.publisher_connect_button = ctk.CTkButton(
+            publisher_connection_buttons,
             text="Connect to UniSync",
             width=200,
             height=38,
@@ -525,7 +535,22 @@ class UniSyncApp(ctk.CTk):
             hover_color=COLORS["teal_hover"],
             command=self.connect_publisher
         )
-        self.publisher_connect_button.pack(anchor="w", pady=(0, 15))
+        self.publisher_connect_button.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        self.publisher_disconnect_button = ctk.CTkButton(
+            publisher_connection_buttons,
+            text="Disconnect",
+            width=120,
+            height=38,
+            fg_color=COLORS["red"],
+            hover_color="#A9534B",
+            command=self.disconnect_publisher,
+            state="disabled"
+        )
+        self.publisher_disconnect_button.pack(side="left")
 
         self.publisher_status = ctk.CTkLabel(
             body,
@@ -642,6 +667,9 @@ class UniSyncApp(ctk.CTk):
 
     def connect_publisher(self):
 
+        if self.publisher_socket is not None:
+            return
+
         selected_name = self.publisher_office.get()
         entered_id = self.publisher_id_entry.get().strip()
 
@@ -665,6 +693,8 @@ class UniSyncApp(ctk.CTk):
                 "The Publisher ID does not match the selected office."
             )
             return
+
+        sock = None
 
         try:
             sock = socket.socket(
@@ -724,6 +754,10 @@ class UniSyncApp(ctk.CTk):
                 state="disabled"
             )
 
+            self.publisher_disconnect_button.configure(
+                state="normal"
+            )
+
             self.publisher_office.configure(state="disabled")
             self.publisher_id_entry.configure(state="disabled")
 
@@ -736,10 +770,79 @@ class UniSyncApp(ctk.CTk):
             )
 
         except (OSError, ConnectionError, ValueError) as exc:
+
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
             messagebox.showerror(
                 "Connection Error",
                 f"Could not connect to UniSync:\n{exc}"
             )
+
+    def disconnect_publisher(self, log=True):
+
+        sock = self.publisher_socket
+        was_connected = sock is not None
+
+        if sock is not None:
+
+            try:
+                send_msg(
+                    sock,
+                    create_message(DISCONNECT)
+                )
+            except (OSError, ConnectionError, ValueError):
+                pass
+
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+        self.publisher_socket = None
+        self.publisher_id = None
+
+        if (
+            self.publisher_window is not None
+            and self.publisher_window.winfo_exists()
+        ):
+
+            self.publisher_status.configure(
+                text="● Not connected",
+                text_color=COLORS["red"]
+            )
+
+            self.publisher_connect_button.configure(
+                text="Connect to UniSync",
+                state="normal"
+            )
+
+            self.publisher_disconnect_button.configure(
+                state="disabled"
+            )
+
+            self.publisher_office.configure(state="normal")
+            self.publisher_id_entry.configure(state="normal")
+
+            self.publisher_topic.configure(
+                values=["Connect first"],
+                state="disabled"
+            )
+            self.publisher_topic.set("Connect first")
+
+            self.publisher_send_button.configure(state="disabled")
+            self.publisher_history_button.configure(state="disabled")
+
+        if was_connected and log:
+            self.add_log("INFO", "Publisher disconnected.")
 
     def publish_announcement(self):
 
@@ -905,24 +1008,13 @@ class UniSyncApp(ctk.CTk):
 
     def close_publisher_window(self):
 
-        if self.publisher_socket is not None:
-            try:
-                send_msg(
-                    self.publisher_socket,
-                    create_message(DISCONNECT)
-                )
-            except (OSError, ConnectionError):
-                pass
-            finally:
-                self.publisher_socket.close()
-                self.publisher_socket = None
-                self.publisher_id = None
+        self.disconnect_publisher(log=False)
 
         if self.publisher_window is not None:
             self.publisher_window.destroy()
             self.publisher_window = None
 
-        self.add_log("INFO", "Publisher disconnected.")
+        self.add_log("INFO", "Publisher window closed.")
 
     # ==========================================
     # SUBSCRIBER WINDOW
@@ -991,7 +1083,7 @@ class UniSyncApp(ctk.CTk):
 
         self.subscriber_id_entry = ctk.CTkEntry(
             content,
-            placeholder_text="Enter your Student Number",
+            placeholder_text="Enter your University Number",
             height=38
         )
         self.subscriber_id_entry.pack(fill="x", pady=(0, 10))
@@ -1101,7 +1193,7 @@ class UniSyncApp(ctk.CTk):
         self.subscriber_output.insert(
             "end",
             "Welcome to UniSync Subscriber.\n"
-            "Connect using your Student Number to get started.\n"
+            "Connect using your University Number to get started.\n"
         )
         self.subscriber_output.configure(state="disabled")
 
@@ -1113,8 +1205,8 @@ class UniSyncApp(ctk.CTk):
 
         if not client_id:
             messagebox.showwarning(
-                "Missing Student Number",
-                "Please enter your Student Number."
+                "Missing University Number",
+                "Please enter your University Number."
             )
             return
 
