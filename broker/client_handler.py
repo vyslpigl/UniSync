@@ -1,6 +1,9 @@
+
 import threading
 import logging
 
+from clients.client_manager import get_publisher_topics
+from broker.topic_manager import is_valid_topic
 from networking.socket_utils import send_msg, recv_msg
 from networking.protocol import (
     REGISTER_PUBLISHER,
@@ -10,6 +13,7 @@ from networking.protocol import (
     SUBSCRIBE,
     UNSUBSCRIBE,
     ACK,
+    HISTORY,
     STATUS,
     ERROR,
     DISCONNECT,
@@ -40,7 +44,6 @@ class ClientHandler(threading.Thread):
         """
         Safely sends a message through this client's socket.
         """
-
         with self.send_lock:
             send_msg(self.sock, message)
 
@@ -146,7 +149,8 @@ class ClientHandler(threading.Thread):
                 ref=message_type,
             )
         )
-                # Deliver messages queued while the subscriber was offline.
+
+        # Deliver messages queued while the subscriber was offline.
         if self.role == "subscriber":
             self.broker.deliver_pending_messages(self)
 
@@ -184,6 +188,21 @@ class ClientHandler(threading.Thread):
                 title = message.get("title")
                 content = message.get("content")
 
+                # Check whether the topic is valid.
+                if not is_valid_topic(topic):
+                    self.send_error("Invalid topic")
+                    continue
+
+                # Check whether the publisher is authorized
+                # to publish to this topic.
+                allowed_topics = get_publisher_topics(self.client_id)
+
+                if topic not in allowed_topics:
+                    self.send_error(
+                        "You are not authorized to publish to this topic"
+                    )
+                    continue
+
                 # Let the broker validate and store the message.
                 accepted, result = self.broker.publish_message(
                     self.client_id,
@@ -209,7 +228,7 @@ class ClientHandler(threading.Thread):
 
                 continue
 
-                    # Handle subscription requests.
+            # Handle subscription requests.
             if message_type == SUBSCRIBE:
 
                 # Only subscribers are allowed to subscribe.
@@ -241,15 +260,15 @@ class ClientHandler(threading.Thread):
 
                 except Exception:
                     logger.exception("Failed to save subscription")
-                    
+
                     self.broker.topic_manager.unsubscribe(
                         self.client_id,
                         topic,
                     )
 
                     self.send_error("Failed to save subscription")
-                    continue    
-                        
+                    continue
+
                 # Confirm successful subscription.
                 self.send(
                     create_message(
@@ -263,7 +282,6 @@ class ClientHandler(threading.Thread):
                 continue
 
             # Handle unsubscription requests.
-                        # Handle unsubscription requests.
             if message_type == UNSUBSCRIBE:
 
                 # Only subscribers are allowed to unsubscribe.
@@ -303,7 +321,7 @@ class ClientHandler(threading.Thread):
 
                     self.send_error("Failed to remove subscription")
                     continue
-                    
+
                 # Confirm successful unsubscription.
                 self.send(
                     create_message(
@@ -313,6 +331,43 @@ class ClientHandler(threading.Thread):
                         topic=topic,
                     )
                 )
+
+                continue
+
+            # Handle message history requests.
+            if message_type == HISTORY:
+
+                try:
+                    if self.role == "subscriber":
+                        messages = (
+                            self.broker.queue_repository
+                            .get_subscriber_message_history(self.client_id)
+                        )
+
+                    elif self.role == "publisher":
+                        messages = (
+                            self.broker.queue_repository
+                            .get_publisher_message_history(self.client_id)
+                        )
+
+                    else:
+                        self.send_error("Invalid client role")
+                        continue
+
+                    self.send(
+                        create_message(
+                            HISTORY,
+                            messages=messages,
+                        )
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "Failed to retrieve message history"
+                    )
+                    self.send_error(
+                        "Failed to retrieve message history"
+                    )
 
                 continue
 
@@ -348,8 +403,7 @@ class ClientHandler(threading.Thread):
 
                 continue
 
-            # Other messages are not supported yet.
-            # Routing and subscriptions will be implemented later.
+            # Other message types are not supported.
             self.send_error(
                 f"Unsupported message type: {message_type}"
             )
@@ -358,7 +412,6 @@ class ClientHandler(threading.Thread):
         """
         Sends an ERROR response to the client.
         """
-
         try:
             self.send(
                 create_message(
@@ -379,7 +432,6 @@ class ClientHandler(threading.Thread):
         """
 
         if self.registered:
-
 
             if self.role == "subscriber":
                 self.broker.topic_manager.remove_subscriber(

@@ -1,7 +1,10 @@
 import unittest
 import socket
+import os
+import tempfile
 
 from broker.broker_server import BrokerServer
+from storage import database
 from networking.socket_utils import send_msg, recv_msg
 from networking.protocol import (
     REGISTER_PUBLISHER,
@@ -18,12 +21,20 @@ from networking.protocol import (
 class PublishingNetworkTests(unittest.TestCase):
 
     def setUp(self):
-        # Start a broker on an automatically assigned port.
-        self.broker = BrokerServer(port=0)
-        self.broker.start()
+        # Use a temporary database for each network test.
+        self.original_database_path = database.DATABASE_PATH
+        self.temp_dir = tempfile.TemporaryDirectory()
+        database.DATABASE_PATH = os.path.join(
+            self.temp_dir.name,
+            "test_unisync.db",
+        )
 
         # Keep track of sockets created during each test.
         self.client_sockets = []
+
+        # Start a broker on an automatically assigned port.
+        self.broker = BrokerServer(port=0)
+        self.broker.start()
 
     def tearDown(self):
         # Close test client sockets.
@@ -35,6 +46,10 @@ class PublishingNetworkTests(unittest.TestCase):
 
         # Stop the broker.
         self.broker.stop()
+
+        # Restore the original database location.
+        database.DATABASE_PATH = self.original_database_path
+        self.temp_dir.cleanup()
 
     def connect_client(self, client_id, registration_type):
         # Connect to the running broker.
@@ -64,7 +79,7 @@ class PublishingNetworkTests(unittest.TestCase):
 
     def test_publisher_can_publish_over_tcp(self):
         publisher = self.connect_client(
-            "PUB-ICT",
+            "PUB-004",
             REGISTER_PUBLISHER,
         )
 
@@ -94,7 +109,7 @@ class PublishingNetworkTests(unittest.TestCase):
 
         stored_message = self.broker.messages[message_id]
 
-        self.assertEqual(stored_message["publisher_id"], "PUB-ICT")
+        self.assertEqual(stored_message["publisher_id"], "PUB-004")
         self.assertEqual(stored_message["topic"], "college.ict")
         self.assertEqual(stored_message["title"], "System Maintenance")
         self.assertEqual(
@@ -133,7 +148,7 @@ class PublishingNetworkTests(unittest.TestCase):
 
     def test_invalid_publish_requests_do_not_disconnect_publisher(self):
         publisher = self.connect_client(
-            "PUB-ICT",
+            "PUB-004",
             REGISTER_PUBLISHER,
         )
 
@@ -322,7 +337,7 @@ class PublishingNetworkTests(unittest.TestCase):
 
     def test_publisher_cannot_subscribe_over_tcp(self):
         publisher = self.connect_client(
-            "PUB-ICT",
+            "PUB-004",
             REGISTER_PUBLISHER,
         )
 
@@ -349,7 +364,7 @@ class PublishingNetworkTests(unittest.TestCase):
             "college.ict"
         )
 
-        self.assertNotIn("PUB-ICT", subscribers)
+        self.assertNotIn("PUB-004", subscribers)
 
         # Verify publisher can still publish after rejection.
         send_msg(
